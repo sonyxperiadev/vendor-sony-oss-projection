@@ -1,0 +1,13 @@
+on post-fs-data
+    # create directory for ucommsvr
+    mkdir /dev/socket/ucommsvr 0755 system system
+
+on property:sys.boot_completed=1
+    start ucommsvr
+
+service ucommsvr /vendor/bin/ucommsvr
+    class main
+    user system
+    group system
+    disabled
+

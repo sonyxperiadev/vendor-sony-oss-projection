@@ -24,6 +24,7 @@ LOCAL_MODULE := initlight
 LOCAL_MODULE_TAGS := optional
 #LOCAL_MODULE_RELATIVE_PATH := hw
 LOCAL_MODULE_OWNER := sony
+LOCAL_INIT_RC_64   := vendor/etc/init/initlight.rc
 LOCAL_PROPRIETARY_MODULE := true
 
 include $(BUILD_EXECUTABLE)

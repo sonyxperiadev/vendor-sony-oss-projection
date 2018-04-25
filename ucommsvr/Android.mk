@@ -25,6 +25,7 @@ LOCAL_SHARED_LIBRARIES := liblog libcutils
 LOCAL_MODULE := ucommsvr
 LOCAL_MODULE_TAGS := optional
 LOCAL_MODULE_OWNER := sony
+LOCAL_INIT_RC_64   := vendor/etc/init/ucommsvr.rc
 LOCAL_PROPRIETARY_MODULE := true
 include $(BUILD_EXECUTABLE)
 

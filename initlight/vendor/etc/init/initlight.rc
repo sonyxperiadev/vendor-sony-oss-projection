@@ -1,0 +1,2 @@
+on post-fs-data
+    exec u:r:initlight:s0 system -- /vendor/bin/initlight

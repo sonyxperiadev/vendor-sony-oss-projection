@@ -1,0 +1,5 @@
+<resources>
+    <string name="app_name">ProjectorSettings</string>
+    <string name="focusSettings">Focus</string>
+    <string name="keystoneSettings">Keystone</string>
+</resources>

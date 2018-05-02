@@ -1,2 +1,4 @@
 on post-fs-data
+    chmod 0660 /dev/ttyHS1
+    chown system system /dev/ttyHS1
     exec u:r:initlight:s0 system -- /vendor/bin/initlight

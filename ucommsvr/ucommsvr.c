@@ -34,7 +34,9 @@
 #include <private/android_filesystem_config.h>
 #include <utils/Log.h>
 
+#include <libpolyreg/polyreg.h>
 #include "ucomm_private.h"
+#include "ucomm_input.h"
 #include "ucomm_ext.h"
 
 #define LOG_TAG			"MicroComm"
@@ -54,6 +56,8 @@
 /* Serial port fd */
 static int serport = -1;
 static struct micro_communicator_cached_data ucomm_cached;
+static struct micro_communicator_focus_params focus_conf;
+static struct micro_communicator_focus_state  focus_state;
 
 /* MicroComm Server */
 static int sock;
@@ -64,6 +68,8 @@ static bool ucthread_run = true;
 
 /* Debugging defines */
 // #define DEBUG_FOCUS_STEPTEST
+// #define DEBUG_CMDS
+// #define DEBUG_FOCUS
 
 /*
  * sendcmd_query - Sends a command to the uC via serial.
@@ -76,10 +82,16 @@ static int sendcmd(int fd, uint8_t cmd[], int cmd_sz,
 	int i, rc = -2, retry = 0, sz_ans = 32;
 	char buf[40];
 
+#ifdef DEBUG_CMDS
+	for (i = 0; i < cmd_sz; i++) {
+		ALOGE("SEND: %2x", buf[i]);
+	}
+#endif
+
 	do {
-		write(fd, cmd, cmd_sz);
-		usleep(100);
 		tcdrain(fd);
+		usleep(50);
+		write(fd, cmd, cmd_sz);
 		usleep(75);
 
 		ioctl(fd, FIONREAD, &sz_ans);
@@ -122,60 +134,6 @@ static int sendcmd(int fd, uint8_t cmd[], int cmd_sz,
 	return rc;
 }
 
-
-
-static int sendcmd_focus_test(int fd, uint8_t cmd[], int cmd_sz,
-		const uint8_t reply[], int reply_len)
-{
-	int i, rc = -2, retry = 0, sz_ans = 32;
-	char buf[40];
-
-	do {
-		write(fd, cmd, cmd_sz);
-		usleep(25);
-		tcdrain(fd);
-		usleep(50);
-
-		ioctl(fd, FIONREAD, &sz_ans);
-		if (sz_ans <= 0)
-			continue;
-
-		if (sz_ans > 40)
-			sz_ans = 40;
-
-		rc = read(fd, buf, sz_ans);
-		if (buf[0] == 0x0b &&
-		    buf[1] == 0x0e) {
-			rc = 0;
-			/* If VT SO received, check reply */
-			if (buf[2] == 0x02 &&
-			    buf[3] == 0x44 &&
-			    buf[4] == 0x46)
-				return ERR_UCOMM_FOCUS_OVERFLOW;
-			else if (buf[2] == 0x02 &&
-				 buf[3] == 0x5a &&
-				 buf[4] == 0x5c)
-				return ERR_UCOMM_FOCUS_UNDERFLOW;
-		}
-		else {
-			rc = -2;
-		}
-		if (rc == 0)
-			return 0;
-		retry++;
-	} while (retry < 4);
-
-
-	if (rc == -2)
-		ALOGE("INVALID RX DATA: 0x%x 0x%x",
-				buf[0], buf[1]);
-	else if (rc == -3)
-		ALOGE("INVALID REPLY: 0x%x 0x%x",
-				buf[2], buf[3]);
-
-	return rc;
-}
-
 /*
  * sendcmd_query - Sends a command and expects back a reply containing
  *		   data to interpret.
@@ -184,36 +142,52 @@ static int sendcmd_focus_test(int fd, uint8_t cmd[], int cmd_sz,
  *
  * \return Returns reply length or negative number for error.
  */
-static int sendcmd_query(int fd, uint8_t cmd[], int cmd_sz, uint8_t *reply)
+static int sendcmd_query(int fd, uint8_t cmd[], int cmd_sz,
+			uint8_t *reply, int nretries)
 {
 	int i, rc = -2, retry = 0, sz_ans = 32;
 	char buf[40];
 
 	do {
-		write(fd, cmd, cmd_sz);
+		//tcdrain(fd);
+		tcflush(fd, TCIOFLUSH);
 		usleep(25);
+		write(fd, cmd, cmd_sz);
 		tcdrain(fd);
-		usleep(50);
+		usleep(8000);
 
 		ioctl(fd, FIONREAD, &sz_ans);
-		if (sz_ans <= 0)
-			continue;
+		if (sz_ans <= 0) {
+			usleep(12000);
+
+			/* Retry ONE more time */
+			ioctl(fd, FIONREAD, &sz_ans);
+			if (sz_ans <= 0)
+				continue;
+		}
 
 		if (sz_ans > 40)
 			sz_ans = 40;
 
 		rc = read(fd, buf, sz_ans);
 
+#ifdef DEBUG_CMDS
+		for (i = 0; i < sz_ans; i++) {
+			ALOGE("Recv: %02x", buf[i]);
+		}
+#endif
+
 		/* If VT SO received, check reply */
 		if (buf[0] == 0x0b &&
 		    buf[1] == 0x0e) {
 			rc = 0;
 			/* Focus set position reply */
-			if (buf[2] == 0x04) {
+			if (buf[2] == 0x04 &&
+			    buf[3] == 0x28) {
 				reply[0] = buf[4]; /* BYTE1 */
 				reply[1] = buf[5]; /* BYTE2 */
 				reply[2] = buf[6]; /* CTRL */
-				return REPLY_FOCUS_CUSTOM_LEN;
+				return REPLY_SHORT_FOCUS_LEN;
 			}
 
 			/* Focus position query reply */
@@ -222,6 +196,10 @@ static int sendcmd_query(int fd, uint8_t cmd[], int cmd_sz, uint8_t *reply)
 				reply[0] = buf[4]; /* BYTE1 */
 				reply[1] = buf[5]; /* BYTE2 */
 				reply[2] = buf[12]; /* Sign (+/-) */
+				reply[3] = buf[6]; /* NEAR BYTE1 */
+				reply[4] = buf[7]; /* NEAR BYTE2 */
+				reply[5] = buf[8]; /* FAR BYTE1 */
+				reply[6] = buf[9]; /* FAR BYTE1 */
 				return REPLY_FOCUS_CUSTOM_LEN;
 			}
 
@@ -246,12 +224,14 @@ static int sendcmd_query(int fd, uint8_t cmd[], int cmd_sz, uint8_t *reply)
 		if (rc == 0)
 			return 0;
 		retry++;
-	} while (retry < 4);
+	} while (retry < nretries);
 
 	if (rc == -2)
 		ALOGE("INVALID RX DATA: 0x%x 0x%x",
 				buf[0], buf[1]);
-
+	else if (rc == -3)
+		ALOGE("UNEXPECTED REPLY: 0x%x 0x%x",
+				buf[2], buf[3]);
 	return rc;
 }
 
@@ -375,8 +355,10 @@ int send_set_brightness(int fd, int brightness)
 	cmd_len = sizeof(cmd_light_lvl) / sizeof(cmd_light_lvl[0]);
 	full_cmd = __concat_cmd(std_header, cmd_light_lvl,
 				head_len, cmd_len, &full_sz);
-	if (full_cmd == NULL)
+	if (full_cmd == NULL) {
+		ALOGE("CMDNULL!!!");
 		return -2;
+	}
 
 	/* Paranoid sanity check:
 	 * min 40, max 100 for a total of 60 steps */
@@ -384,6 +366,8 @@ int send_set_brightness(int fd, int brightness)
 		conv_br = 100;
 	else if (conv_br < 40)
 		conv_br = 40;
+
+	ALOGE("Sending brightness ori %d conv %u", brightness, conv_br);
 
 	full_cmd[head_len + 5] = conv_br;
 	full_cmd[head_len + cmd_len - 1] = conv_br + control;
@@ -443,18 +427,82 @@ end:
 	return rc;
 }
 
+int parse_focus_params(int fd, bool stabilized)
+{
+	int head_len = sizeof(std_header) / sizeof(std_header[0]);
+	int full_sz;
+	int cmd_len;
+	uint8_t *full_cmd = NULL;
+	uint8_t *reply = malloc(REPLY_FOCUS_CUSTOM_LEN * sizeof(uint8_t));
+	int16_t prev_focus;
+	int rc, retry = 0;
+
+	cmd_len = sizeof(cmd_focus_query) / sizeof(cmd_focus_query[0]);
+	full_cmd = __concat_cmd(std_header, cmd_focus_query,
+					head_len, cmd_len, &full_sz);
+	if (full_cmd == NULL)
+		return -2;
+parse:
+	if (retry > 30)
+		return -1;
+
+	prev_focus = focus_state.cur_focus;
+
+	rc = sendcmd_query(fd, full_cmd, full_sz, reply, 10);
+	if (rc != REPLY_FOCUS_CUSTOM_LEN) {
+		if (stabilized) {
+			/* The device may be resetting focus... */
+			usleep(150000);
+			retry++;
+			goto parse;
+		}
+		return rc;
+	}
+
+	focus_state.near_max = (reply[3] << 8) | reply[4];
+	focus_state.far_max  = -(UINT_MAX - ((reply[5] << 8) | reply[6]) + 1);
+	focus_state.cur_focus = (reply[0] << 8) | reply[1];
+
+#ifdef DEBUG_FOCUS
+	ALOGE("Current focus: %d", focus_state.cur_focus);
+	ALOGE("RANGE: %d to %d", focus_state.far_max, focus_state.near_max);
+#endif
+
+	if (!stabilized)
+		return 0;
+
+	if (prev_focus != focus_state.cur_focus) {
+#ifdef DEBUG_FOCUS
+		ALOGE("prev_focus = %d  cur = %d",
+			prev_focus, focus_state.cur_focus);
+#endif
+		/* The lens is moving... let it finish */
+		usleep(1000000);
+
+		/* We will never hit max_retry, but let's avoid inf loops.. */
+		retry++;
+
+		/* ...And check if the lens has finally got in position */
+		goto parse;
+	}
+
+	return 0;
+}
+
+#define SHIFT24(x)	0xFFFF00 + x
+
 int send_set_focus(int fd, int target_focal)
 {
 	int head_len = sizeof(std_header) / sizeof(std_header[0]);
 	int full_sz;
 	int cmd_len;
-	int16_t cur_focus_val, new_focus_val;
-	int num_steps, i, rc;
-	bool go_near = false;
+	int num_steps, tgt, i, rc, reply_type;
+	bool is_target_reached, go_near = false;
 	uint8_t *full_cmd = NULL;
 	uint8_t *reply = malloc(REPLY_FOCUS_CUSTOM_LEN * sizeof(uint8_t));
 	uint8_t control;
 	static int cur_proc_pass;
+	int focus_param[2];
 
 	/* Make sure we initialize the current processing pass at start */
 	cur_proc_pass = 0;
@@ -462,150 +510,203 @@ int send_set_focus(int fd, int target_focal)
 	ALOGI("Stepping to focal %d", target_focal);
 
 reprocess:
-	cmd_len = sizeof(cmd_focus_query) / sizeof(cmd_focus_query[0]);
-	full_cmd = __concat_cmd(std_header, cmd_focus_query,
-					head_len, cmd_len, &full_sz);
-	if (full_cmd == NULL)
-		return -2;
-
 	/* Retrieve the current lens position */
-	rc = sendcmd_query(fd, full_cmd, full_sz, reply);
-	if (rc != REPLY_FOCUS_CUSTOM_LEN)
+	rc = parse_focus_params(fd, false);
+	if (rc < 0)
 		return rc;
 
-	/*
-	 * Assemble a 16-bit signed integer: the focuser range is
-	 *                      -383 to 149
-	 */
-	cur_focus_val = reply[0] << 8;
-	cur_focus_val |= reply[1];
-
 	/* Nothing to do? */
-	if (target_focal == cur_focus_val)
+	if (target_focal == focus_state.cur_focus) {
+		ALOGI("Target step reached.");
 		return 0;
-
-	/* Calculate the number of focuser steps to do */
-	if (target_focal < cur_focus_val) {
-		cmd_len = sizeof(cmd_focus_down) / sizeof(cmd_focus_down[0]);
-		full_cmd = __concat_cmd(std_header, cmd_focus_down,
-						head_len, cmd_len, &full_sz);
-		go_near = true;
-		num_steps = cur_focus_val - target_focal;
-	} else {
-		cmd_len = sizeof(cmd_focus_up) / sizeof(cmd_focus_up[0]);
-		full_cmd = __concat_cmd(std_header, cmd_focus_up,
-						head_len, cmd_len, &full_sz);
-		go_near = false;
-		num_steps = target_focal - cur_focus_val;
 	}
 
+	tgt = target_focal;
+
+	cmd_len = sizeof(cmd_focus_setpos) / sizeof(cmd_focus_setpos[0]);
+	full_cmd = __concat_cmd(std_header, cmd_focus_setpos,
+						head_len, cmd_len, &full_sz);
 	if (full_cmd == NULL)
 		return -2;
 
-	/* GO! GO! GO! */
-	for (i = 0; i < num_steps; i++) {
-		rc = sendcmd_query(fd, full_cmd, full_sz, reply);
-		if (rc != REPLY_FOCUS_CUSTOM_LEN)
-			break;
+	ALOGE("Target: %d  Cur: %d", tgt, focus_state.cur_focus);
+
+	/* Calculate the number of focuser steps to do */
+	if (tgt < focus_state.cur_focus) {
+		go_near = false; /* GO FAR */
+
+		if (tgt < focus_state.far_max)
+			tgt = focus_state.far_max;
+
+		/* tgt is negative... */
+		num_steps = focus_state.cur_focus - tgt;
+		if (num_steps > 0)
+			num_steps *= -1;
+		if (num_steps < -200)
+			num_steps = -200;
+	} else {
+		go_near = true; /* GO NEAR */
+
+		if (tgt > focus_state.near_max)
+			tgt = focus_state.near_max;
+
+		/* tgt is positive... */
+		num_steps = tgt - focus_state.cur_focus;
+		if (num_steps < 0)
+			num_steps *= -1;
+		if (num_steps > 200)
+			num_steps = 200;
 	}
-	cur_focus_val = reply[0] << 8;
-	cur_focus_val |= reply[1];
+
+	if (go_near) {
+		/* NEAR: Number of steps */
+		full_cmd[5] = (num_steps & 0xFF00) >> 8;
+		full_cmd[6] = num_steps & 0x00FF;
+
+		/* Checksum */
+		full_cmd[9] = num_steps + FOCUS_CHECKSUM_BASE;
+	} else {
+		/* FAR: Number of steps */
+		full_cmd[5] = (num_steps & 0xFF00) >> 8;
+		full_cmd[6] = num_steps & 0x00FF;
+
+		/* Checksum */
+		full_cmd[9] = SHIFT24(full_cmd[5]) + FOCUS_CHECKSUM_BASE;
+		full_cmd[9] += SHIFT24(full_cmd[6]) & 0xff;
+	}
+
+#ifdef DEBUG_FOCUS
+	ALOGE("num_steps = %d", num_steps);
+	ALOGE("FOC Prev: %d", focus_state.cur_focus);
+#endif
+
+	reply_type = sendcmd_query(fd, full_cmd, full_sz, reply, 0);
+	if (reply_type == REPLY_SHORT_FOCUS_LEN ||
+	    reply_type == REPLY_FOCUS_CUSTOM_LEN)
+		focus_state.cur_focus = (reply[0] << 8) | reply[1];
+	else
+		ALOGD("Unexpected reply on set focus command.");
+
+	/* Sleep for... */
+	if (num_steps < 0)
+		num_steps *= -1;
+
+	usleep(1000 * num_steps);
+
+#ifdef DEBUG_FOCUS
+	ALOGE("FOC After: %d", focus_state.cur_focus);
+#endif
+
+	/* Retrieve the current lens position */
+	rc = parse_focus_params(fd, true);
+	if (rc < 0)
+		return rc;
 
 	/* If anything went wrong, do another pass */
-	if (cur_focus_val != target_focal &&
+	if (focus_state.cur_focus != tgt &&
 	    cur_proc_pass < FOCUS_PROCESSING_MAX_PASS) {
 		cur_proc_pass++;
 		ALOGD("Uh-Oh! Current step: %d. Target: %d",
-			cur_focus_val, target_focal);
+			focus_state.cur_focus, target_focal);
 		goto reprocess;
 	}
 
-	if (cur_focus_val != target_focal &&
+	if (focus_state.cur_focus != tgt &&
 	    cur_proc_pass == FOCUS_PROCESSING_MAX_PASS) {
 		ALOGE("Focus ERROR! Current step: %d. Target: %d",
-			cur_focus_val, target_focal);
-		rc = ERR_UCOMM_FOCUS_GENERAL;
+			focus_state.cur_focus, target_focal);
+		reply_type = ERR_UCOMM_FOCUS_GENERAL;
 	}
 
-#ifdef DEBUG_FOCUS_STEPTEST
-	if (target_focal == UCOMM_FOCUS_TEST_NEAR) {
-		cmd_len = sizeof(cmd_focus_up) / sizeof(cmd_focus_up[0]);
-		full_cmd = __concat_cmd(std_header, cmd_focus_up,
-					head_len, cmd_len, &full_sz);
-		if (full_cmd == NULL)
-			return -2;
-		num_steps = 0;
-
-		do {
-			num_steps++;
-			rc = sendcmd_focus_test(fd, full_cmd, full_sz,
-						cmd_reply_focus_up_ok, cmd_reply_len);
-			if (rc == ERR_UCOMM_FOCUS_UNDERFLOW || rc == ERR_UCOMM_FOCUS_OVERFLOW)
-				goto err;
-		} while (1);
-	} else if (target_focal == UCOMM_FOCUS_TEST_FAR) {
-		cmd_len = sizeof(cmd_focus_down) / sizeof(cmd_focus_down[0]);
-		full_cmd = __concat_cmd(std_header, cmd_focus_down,
-					head_len, cmd_len, &full_sz);
-		if (full_cmd == NULL)
-			return -2;
-		num_steps = 0;
-
-		do {
-			num_steps++;
-			rc = sendcmd_focus_test(fd, full_cmd, full_sz,
-						cmd_reply_focus_dn_ok, cmd_reply_len);
-			if (rc == ERR_UCOMM_FOCUS_UNDERFLOW || rc == ERR_UCOMM_FOCUS_OVERFLOW)
-				goto err;
-		} while (1);
-	}
-#endif
-
+	is_target_reached = (focus_state.cur_focus == tgt);
 err:
-	if (rc == ERR_UCOMM_FOCUS_UNDERFLOW)
+	if (reply_type == ERR_UCOMM_FOCUS_UNDERFLOW)
 		ALOGE("ERROR: FOCUSER UNDERFLOW!");
-	else if (rc == ERR_UCOMM_FOCUS_OVERFLOW)
+	else if (reply_type == ERR_UCOMM_FOCUS_OVERFLOW)
 		ALOGE("ERROR: FOCUSER OVERFLOW!");
-	else if (rc == REPLY_FOCUS_CUSTOM_LEN)
-		ALOGI("Requested step: %d. Current step %d.",
-			target_focal, cur_focus_val);
+	else if (reply_type == REPLY_FOCUS_CUSTOM_LEN ||
+		 reply_type == REPLY_SHORT_FOCUS_LEN ||
+		 is_target_reached)
+		ALOGI("Focus: Requested step: %d. Current step %d.",
+			target_focal, focus_state.cur_focus);
 	else
 		ALOGE("Error while trying to focus.");
 	free(reply);
-
 
 	return rc;
 }
 
 int send_get_focus(int fd)
 {
+	int rc = parse_focus_params(fd, true);
+	if (rc < 0)
+		ALOGW("Parse focus params failed");
+
+	return focus_state.cur_focus;
+}
+
+int set_reset_focus(int fd)
+{
+	int rc;
 	int head_len = sizeof(std_header) / sizeof(std_header[0]);
 	int full_sz;
 	int cmd_len;
-	int16_t cur_focus_val;
-	int rc;
 	uint8_t *full_cmd = NULL;
-	uint8_t *reply = malloc(REPLY_FOCUS_CUSTOM_LEN * sizeof(uint8_t));
 
-	cmd_len = sizeof(cmd_focus_query) / sizeof(cmd_focus_query[0]);
-	full_cmd = __concat_cmd(std_header, cmd_focus_query,
-					head_len, cmd_len, &full_sz);
+	cmd_len = sizeof(cmd_focus_reset) / sizeof(cmd_focus_reset[0]);
+	full_cmd = __concat_cmd(std_header, cmd_focus_reset,
+				head_len, cmd_len, &full_sz);
 	if (full_cmd == NULL)
 		return -2;
 
-	/* Retrieve the current lens position */
-	rc = sendcmd_query(fd, full_cmd, full_sz, reply);
-	if (rc != REPLY_FOCUS_CUSTOM_LEN)
-		return rc;
+	rc = sendcmd(fd, full_cmd, full_sz,
+			cmd_reply_nul, 0);
 
-	/*
-	 * Assemble a 16-bit signed integer: the focuser range is
-	 *                      -383 to 149
-	 */
-	cur_focus_val = reply[0] << 8;
-	cur_focus_val |= reply[1];
+	return rc;
+}
 
-	return cur_focus_val;
+
+int do_auto_focus(int fd)
+{
+	int rc, tof_score, focus_step;
+	struct micro_communicator_vl53l0 tof_data;
+
+	rc = set_reset_focus(fd);
+	if (rc < 0)
+		ALOGW("Failed to reset focus!");
+
+	tof_score = ucomm_tof_thr_read_stabilized(&tof_data,
+			TOF_STABILIZATION_DEF_RUNS,
+			TOF_STABILIZATION_MATCH_NO,
+			TOF_STABILIZATION_WAIT_MS,
+			TOF_STABILIZATION_HYST_MM);
+
+	ALOGE("Got tof score %d", tof_score);
+
+	/* If the device is not stable, do not proceed */
+	if (tof_score < 0)
+		return -4;
+
+	/* Focus reset succeeded */
+	if (rc == 0)
+		usleep(800000); // Allow the reset to finish
+
+
+	rc = parse_focus_params(fd, true);
+	if (rc)
+		ALOGW("Focus is not stable!");
+
+	focus_step = (int)polyreg_f(tof_data.range_mm, focus_conf.terms,
+					FOCTBL_POLYREG_DEGREE);
+
+	ALOGD("Setting focus %d for %dmm", focus_step, tof_data.range_mm);
+
+	if (focus_step < focus_state.far_max)
+		focus_step = focus_state.far_max;
+	else if (focus_step > focus_state.near_max)
+		focus_step = focus_state.near_max;
+
+	return send_set_focus(fd, focus_step);
 }
 
 int send_get_keystone(int fd)
@@ -642,22 +743,16 @@ int send_set_keystone(int fd, int ksval)
 	 * 	0 treated as -1.
 	 */
 	if (ksval > 0) {
-		full_cmd[head_len + cmd_len - 3] = 1;
-		control = 82;
-		final_val = ksval;
-	} else {
 		full_cmd[head_len + cmd_len - 3] = 0;
 		control = 81;
+		final_val = ksval;
+	} else {
+		full_cmd[head_len + cmd_len - 3] = 1;
+		control = 82;
 
 		/* ...we need an unsigned value... */
 		final_val = (uint8_t)(ksval * (-1));
 	}
-
-	/* Satisfy the sanity check */
-	if (final_val > 254)
-		final_val = 254 - control;
-	else if (final_val < control)
-		final_val = 0;
 
 	full_cmd[head_len + cmd_len - 2] = final_val;
 	full_cmd[head_len + cmd_len - 1] = final_val + control;
@@ -713,6 +808,10 @@ static int32_t ucomm_dispatch(struct micro_communicator_params *params)
 	case OP_KEYSTONE_GET:
 		rc = send_get_keystone(serport);
 		break;
+	case OP_AUTOFOCUS:
+		rc = do_auto_focus(serport);
+		break;
+	case OP_CONT_AF_SET:
 	default:
 		ALOGE("Invalid operation requested.");
 		rc = -2;
@@ -841,6 +940,65 @@ static int manage_ucommsvr(bool start)
 	return 0;
 }
 
+/*
+ * ucomm_autofocus_get_coeff - Prepares the focus algorithm in advance
+ *			       by getting the polynomial regression's
+ *			       correlation coefficient for the provided
+ *			       input-focus table.
+ *
+ * \return Returns zero or negative errno.
+ */
+static int ucomm_autofocus_get_coeff(void)
+{
+	int i;
+	struct pair_data *pairs;
+	double coeff;
+	int rs = 3 * FOCTBL_POLYREG_DEGREE;
+
+	if (focus_conf.table == NULL)
+		return -3;
+
+	pairs = (struct pair_data*)calloc(focus_conf.num_steps+1,
+				 sizeof(struct pair_data));
+	if (pairs == NULL) {
+		ALOGE("Memory exhausted. Cannot write focus table");
+		return -4;
+	}
+
+	for (i = 0; i <= focus_conf.num_steps; i++) {
+		pairs[i].x = focus_conf.table[i].input_val;
+		pairs[i].y = focus_conf.table[i].focus_step;
+		ALOGD("Table x:%.2f  y:%.2f",
+			pairs[i].x, pairs[i].y);
+	}
+
+	ALOGE("Got %d pairs", focus_conf.num_steps);
+
+	focus_conf.terms = (double*)calloc(rs, sizeof(double));
+
+	compute_coefficients(pairs, focus_conf.num_steps,
+				FOCTBL_POLYREG_DEGREE, focus_conf.terms);
+	if (focus_conf.terms == NULL) {
+		ALOGE("FATAL: Cannot compute coefficients.");
+		return -5;
+	}
+
+	for (i = 0; i < focus_conf.num_steps; i++)
+		ALOGE("Term%d: %.10f",i, focus_conf.terms[i]);
+
+	coeff = corr_coeff(pairs, focus_conf.num_steps, focus_conf.terms);
+	if (coeff > 1.0f)
+		ALOGW("WARNING! The correlation coefficient is >1!!");
+	else if (coeff == 0.0f)
+		ALOGW("WARNING! The correlation coefficient is ZERO!!");
+
+	ALOGD("Correlation coefficient: %.10f", coeff);
+
+	ALOGI("Auto-Focus Polynomial Regression coordinates loaded.");
+
+	return 0;
+}
+
 int main(void)
 {
 	struct termios tty;
@@ -865,10 +1023,10 @@ int main(void)
 	}
 
 	/* Set flags */
-	tty.c_cflag = SERPARM_CFLAGS;
-	tty.c_iflag = SERPARM_IFLAGS;
-	tty.c_oflag = 0;
-	tty.c_lflag = 0;
+	tty.c_cflag |= SERPARM_CFLAGS;
+	tty.c_iflag |= SERPARM_IFLAGS;
+	//tty.c_oflag = 0;
+	//tty.c_lflag = 0;
 
 	/* Set communication speed */
         cfsetospeed(&tty, SERPARM_BAUDRATE);
@@ -878,7 +1036,7 @@ int main(void)
 	tcflush(serport, TCIFLUSH);
 
 	/* Send configuration to kernel */
-	if (tcsetattr(serport, TCSANOW, &tty) != 0) {
+	if (tcsetattr(serport, TCSADRAIN, &tty) != 0) {
 		ALOGE("Error: cannot set port attributes\n");
 		rc = -1;
 		goto err;
@@ -890,8 +1048,19 @@ int main(void)
 	ucomm_cached.keystone = 86;
 	ucomm_cached.focus = 129;
 
+	rc = parse_ucomm_xml_data(UCOMMSERVER_CONF_FILE, "tof_focus",
+				&focus_conf);
+	if (rc < 0) {
+		ALOGE("Cannot parse configuration for ToF assisted AF");
+	} else {
+		rc = ucomm_input_tof_init();
+		if (rc < 0)
+			ALOGW("Cannot open ToF. Ranging will be unavailable");
+		ucomm_autofocus_get_coeff();
+	}
+	
 start:
-	/* Serial port opened and configured successfully. Start! */
+	/* All devices opened and configured. Start! */
 	rc = manage_ucommsvr(true);
 	if (rc == 0) {
 		ALOGI("MicroComm Server started");

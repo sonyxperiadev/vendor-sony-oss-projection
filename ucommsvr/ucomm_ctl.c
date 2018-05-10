@@ -129,6 +129,11 @@ int ucommsvr_set_focus(int focus)
 	return ucommsvr_send_set(OP_FOCUS_SET, focus);
 }
 
+int ucommsvr_do_autofocus(void)
+{
+	return ucommsvr_send_set(OP_AUTOFOCUS, 0);
+}
+
 int ucommsvr_get_keystone(void)
 {
 	return ucommsvr_send_set(OP_KEYSTONE_GET, 0);

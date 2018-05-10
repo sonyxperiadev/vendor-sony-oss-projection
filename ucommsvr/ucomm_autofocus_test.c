@@ -116,10 +116,10 @@ static int ucommsvr_send_set(int operation, int value)
 
 int ucommsvr_set_focus(int focus)
 {
-	return ucommsvr_send_set(OP_FOCUS_SET, focus);
+	return ucommsvr_send_set(OP_AUTOFOCUS, focus);
 }
 
 int main(void)
 {
-	return ucommsvr_set_focus(UCOMM_FOCUS_TEST_FAR);
+	return ucommsvr_set_focus(0);
 }

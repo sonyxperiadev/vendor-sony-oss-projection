@@ -35,7 +35,7 @@
 
 static int send_ucommsvr_data(struct micro_communicator_params params)
 {
-	register int sock, recvsock;
+	register int sock;
 	int ret, len = sizeof(struct sockaddr_un);
 	int32_t ucommsvr_reply;
 	fd_set receivefd;

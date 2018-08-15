@@ -10,6 +10,7 @@ LOCAL_JNI_SHARED_LIBRARIES := libprojectorsettings_jni
 
 LOCAL_STATIC_ANDROID_LIBRARIES := android-support-v4
 LOCAL_REQUIRED_MODULES := libprojectorsettings
+LOCAL_PRIVATE_PLATFORM_APIS := true
 LOCAL_PROGUARD_ENABLED := disabled
 include $(BUILD_PACKAGE)
 

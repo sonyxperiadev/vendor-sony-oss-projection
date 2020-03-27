@@ -9,8 +9,6 @@ LOCAL_C_INCLUDES += \
     $(JNI_H_INCLUDE) \
 
 LOCAL_SHARED_LIBRARIES := \
-    libandroid_runtime \
-    libnativehelper \
     libucommunicator \
     libcutils \
     libutils \

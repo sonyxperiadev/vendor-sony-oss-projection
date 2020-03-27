@@ -15,14 +15,9 @@
 LOCAL_PATH := $(call my-dir)
 
 include $(CLEAR_VARS)
-LOCAL_VENDOR_MODULE := true
-LOCAL_COPY_HEADERS_TO := comm_server
-LOCAL_COPY_HEADERS := ./ucomm_ext.h
-include $(BUILD_COPY_HEADERS)
-
-include $(CLEAR_VARS)
 LOCAL_SRC_FILES := ucommsvr.c ucommsvr_input.c expatparser.c
 LOCAL_C_INCLUDES := external/expat/lib
+LOCAL_C_INCLUDES += $(LOCAL_PATH)/include/comm_server
 LOCAL_SHARED_LIBRARIES := liblog libcutils libexpat libpolyreg
 LOCAL_MODULE := ucommsvr
 LOCAL_MODULE_TAGS := optional
@@ -34,6 +29,7 @@ include $(BUILD_EXECUTABLE)
 include $(CLEAR_VARS)
 LOCAL_SRC_FILES := ucomm_autofocus_test.c
 LOCAL_SHARED_LIBRARIES := liblog libcutils
+LOCAL_HEADER_LIBRARIES := libhardware_headers
 LOCAL_MODULE := ucomm_autofocus_test
 LOCAL_MODULE_TAGS := optional
 LOCAL_MODULE_OWNER := sony
@@ -42,10 +38,9 @@ include $(BUILD_EXECUTABLE)
 
 include $(CLEAR_VARS)
 LOCAL_SRC_FILES := ucomm_ctl.c
-LOCAL_SHARED_LIBRARIES := \
-    liblog \
-    libcutils \
-
+LOCAL_SHARED_LIBRARIES := liblog libcutils
+LOCAL_HEADER_LIBRARIES := libhardware_headers
+LOCAL_EXPORT_C_INCLUDES := $(LOCAL_PATH)/include
 LOCAL_MODULE := libucommunicator
 LOCAL_MODULE_TAGS := optional
 LOCAL_MODULE_OWNER := sony

@@ -22,6 +22,7 @@
 #include <errno.h>
 #include <string.h>
 #include <stdlib.h>
+#include <unistd.h>
 #include <sys/types.h>
 #include <sys/stat.h>
 #include <fcntl.h>
@@ -30,7 +31,7 @@
 #include "ucomm_private.h"
 
 #include <cutils/properties.h>
-#include <utils/Log.h>
+#include <log/log.h>
 
 #define UNUSED __attribute__((unused))
 

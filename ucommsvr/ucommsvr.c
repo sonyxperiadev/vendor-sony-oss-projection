@@ -26,13 +26,15 @@
 #include <fcntl.h>
 #include <stdlib.h>
 #include <stdbool.h>
+#include <unistd.h>
+#include <pthread.h>
 #include <string.h>
 #include <errno.h>
 #include <assert.h>
 #include <termios.h>
 
-#include <private/android_filesystem_config.h>
-#include <utils/Log.h>
+#include <cutils/android_filesystem_config.h>
+#include <log/log.h>
 
 #include <libpolyreg/polyreg.h>
 #include "ucomm_private.h"
@@ -1069,7 +1071,7 @@ start:
 		goto err;
 	}
 
-	pthread_join(ucommsvr_thread, (int**)&rc);
+	pthread_join(ucommsvr_thread, (void**)&rc);
 	if (rc == 0)
 		goto start;
 

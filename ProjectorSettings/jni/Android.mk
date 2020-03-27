@@ -5,8 +5,9 @@ include $(CLEAR_VARS)
 LOCAL_SRC_FILES:= \
     ucomm_wrapper_jni.cpp
 
-LOCAL_C_INCLUDES += \
-    $(JNI_H_INCLUDE) \
+# jni.h
+LOCAL_HEADER_LIBRARIES := jni_headers
+LOCAL_USE_VNDK := true
 
 LOCAL_SHARED_LIBRARIES := \
     libucommunicator \
@@ -14,8 +15,6 @@ LOCAL_SHARED_LIBRARIES := \
     libutils \
     liblog \
     libhardware
-
-#LOCAL_MULTILIB := 32
 
 LOCAL_CFLAGS += -Wall -Wextra -Wno-unused-parameter
 LOCAL_MODULE := libprojectorsettings_jni

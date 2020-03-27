@@ -23,4 +23,6 @@ LOCAL_CFLAGS += -Wall -Wextra -Wno-unused-parameter
 LOCAL_MODULE := libprojectorsettings_jni
 LOCAL_MODULE_TAGS := optional
 
+LOCAL_PROPRIETARY_MODULE := true
+
 include $(BUILD_SHARED_LIBRARY)

@@ -12,6 +12,7 @@ LOCAL_STATIC_ANDROID_LIBRARIES := android-support-v4
 LOCAL_REQUIRED_MODULES := libprojectorsettings
 LOCAL_PRIVATE_PLATFORM_APIS := true
 LOCAL_PROGUARD_ENABLED := disabled
+LOCAL_PROPRIETARY_MODULE := true
 include $(BUILD_PACKAGE)
 
 include $(call all-makefiles-under,$(LOCAL_PATH))
